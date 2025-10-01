@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Degrees of Separation - Small World Simulation</title>
+  <title>Small-World Degrees of Separation</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     body {
@@ -14,19 +14,24 @@
       padding: 0;
     }
     h1 {
-      margin-top: 20px;
+      margin: 20px 0;
       font-size: 24px;
     }
     .controls {
-      margin: 20px auto;
+      margin: 10px auto;
       display: flex;
       justify-content: center;
-      gap: 20px;
+      gap: 30px;
+      flex-wrap: wrap;
     }
     .controls label {
       display: flex;
       flex-direction: column;
       font-size: 14px;
+      color: #ddd;
+    }
+    .chart {
+      margin-top: 30px;
     }
     svg {
       background: #181b25;
@@ -34,179 +39,178 @@
       display: block;
       border-radius: 12px;
     }
-    .node {
-      stroke: #fff;
-      stroke-width: 1.5px;
-      cursor: pointer;
+    .bar {
+      fill: #4cc9f0;
     }
-    .link {
-      stroke: #888;
-      stroke-opacity: 0.6;
+    .bar:hover {
+      fill: #ffcc00;
     }
-    .highlighted {
-      stroke: #ffcc00 !important;
-      stroke-width: 3px;
+    .axis text {
+      fill: white;
+    }
+    .axis path, .axis line {
+      stroke: white;
+    }
+    #results {
+      margin-top: 20px;
+      font-size: 16px;
+      color: #ddd;
+    }
+    #results ul {
+      list-style: none;
+      padding: 0;
     }
   </style>
 </head>
 <body>
-  <h1>Degrees of Separation Simulation</h1>
+  <h1>Small-World Simulation: Degrees of Separation</h1>
   <div class="controls">
     <label>
-      Nodes
-      <input type="range" id="nodesRange" min="10" max="100" value="30">
-      <span id="nodesValue">30</span>
+      People
+      <input type="number" id="nodesInput" min="100" max="2000" value="1000">
     </label>
     <label>
-      Neighbors
-      <input type="range" id="neighborsRange" min="1" max="10" value="2">
-      <span id="neighborsValue">2</span>
+      Cluster size
+      <input type="number" id="clusterInput" min="5" max="200" value="100">
     </label>
     <label>
-      Random %
-      <input type="range" id="rewireRange" min="0" max="100" value="10">
-      <span id="rewireValue">10%</span>
+      Random % (shortcuts)
+      <input type="range" id="rewireRange" min="0" max="100" value="5">
+      <span id="rewireValue">5%</span>
     </label>
+    <button id="runBtn">Run Simulation</button>
   </div>
 
-  <svg id="network" width="800" height="600"></svg>
+  <svg id="chart" width="800" height="400"></svg>
+  <h2 id="avgLabel"></h2>
+  <div id="results"></div>
 
   <script>
-    const svg = d3.select("#network");
-    const width = +svg.attr("width");
-    const height = +svg.attr("height");
-
-    let nodes = [], links = [];
-    let simulation;
-
-    function generateSmallWorld(N, K, beta) {
-      nodes = d3.range(N).map(i => ({ id: i }));
-      links = [];
-
-      // Create ring lattice
+    // Generate clustered + random graph
+    function generateGraph(N, K, beta) {
+      let edges = [];
       for (let i = 0; i < N; i++) {
         for (let j = 1; j <= K; j++) {
           let target = (i + j) % N;
           if (Math.random() < beta) {
-            // Random rewire
             target = Math.floor(Math.random() * N);
             if (target === i) continue;
           }
-          links.push({ source: i, target });
+          edges.push([i, target]);
+          edges.push([target, i]); // undirected
         }
       }
+      return edges;
     }
 
-    function updateGraph(N, K, beta) {
-      generateSmallWorld(N, K, beta);
+    // Compute all pairs shortest paths distribution
+    function computeShortestPaths(N, edges) {
+      let adj = Array.from({ length: N }, () => []);
+      edges.forEach(([u, v]) => adj[u].push(v));
 
+      let distCounts = {};
+      let totalDist = 0, totalPairs = 0;
+
+      for (let start = 0; start < N; start++) {
+        let dist = Array(N).fill(-1);
+        dist[start] = 0;
+        let queue = [start];
+
+        while (queue.length) {
+          let u = queue.shift();
+          for (let v of adj[u]) {
+            if (dist[v] === -1) {
+              dist[v] = dist[u] + 1;
+              queue.push(v);
+            }
+          }
+        }
+
+        for (let end = 0; end < N; end++) {
+          if (end !== start && dist[end] > 0) {
+            distCounts[dist[end]] = (distCounts[dist[end]] || 0) + 1;
+            totalDist += dist[end];
+            totalPairs++;
+          }
+        }
+      }
+      let avg = totalDist / totalPairs;
+      return { distCounts, avg };
+    }
+
+    // Draw histogram chart
+    function drawChart(distCounts, avg) {
+      const svg = d3.select("#chart");
       svg.selectAll("*").remove();
 
-      const link = svg.append("g")
-        .selectAll("line")
-        .data(links)
-        .enter().append("line")
-        .attr("class", "link");
+      const data = Object.entries(distCounts).map(([d, c]) => ({ degree: +d, count: c }));
 
-      const node = svg.append("g")
-        .selectAll("circle")
-        .data(nodes)
-        .enter().append("circle")
-        .attr("class", "node")
-        .attr("r", 6)
-        .attr("fill", "#4cc9f0")
-        .call(drag(simulation))
-        .on("click", highlightConnections);
+      const width = +svg.attr("width");
+      const height = +svg.attr("height");
+      const margin = { top: 20, right: 20, bottom: 40, left: 60 };
 
-      simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(100))
-        .force("charge", d3.forceManyBody().strength(-200))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .on("tick", ticked);
+      const x = d3.scaleBand()
+        .domain(data.map(d => d.degree))
+        .range([margin.left, width - margin.right])
+        .padding(0.1);
 
-      function ticked() {
-        link
-          .attr("x1", d => d.source.x)
-          .attr("y1", d => d.source.y)
-          .attr("x2", d => d.target.x)
-          .attr("y2", d => d.target.y);
+      const y = d3.scaleLinear()
+        .domain([0, d3.max(data, d => d.count)]).nice()
+        .range([height - margin.bottom, margin.top]);
 
-        node
-          .attr("cx", d => d.x)
-          .attr("cy", d => d.y);
-      }
+      svg.append("g")
+        .attr("transform", `translate(0,${height - margin.bottom})`)
+        .attr("class", "axis")
+        .call(d3.axisBottom(x));
 
-      function highlightConnections(event, d) {
-        svg.selectAll(".link").classed("highlighted", false);
-        svg.selectAll(".node").attr("fill", "#4cc9f0");
+      svg.append("g")
+        .attr("transform", `translate(${margin.left},0)`)
+        .attr("class", "axis")
+        .call(d3.axisLeft(y));
 
-        // BFS for shortest path degrees
-        let queue = [d.id], visited = new Set([d.id]), dist = { [d.id]: 0 };
-        while (queue.length) {
-          let current = queue.shift();
-          links.forEach(l => {
-            let neighbor = null;
-            if (l.source.id === current) neighbor = l.target.id;
-            else if (l.target.id === current) neighbor = l.source.id;
-            if (neighbor !== null && !visited.has(neighbor)) {
-              visited.add(neighbor);
-              dist[neighbor] = dist[current] + 1;
-              queue.push(neighbor);
-            }
-          });
-        }
+      svg.append("g")
+        .selectAll("rect")
+        .data(data)
+        .join("rect")
+        .attr("class", "bar")
+        .attr("x", d => x(d.degree))
+        .attr("y", d => y(d.count))
+        .attr("height", d => y(0) - y(d.count))
+        .attr("width", x.bandwidth());
 
-        svg.selectAll(".node")
-          .attr("fill", n => dist[n.id] === 0 ? "#ffcc00" : 
-                             dist[n.id] === undefined ? "#444" :
-                             d3.interpolateCool(dist[n.id] / 6));
+      d3.select("#avgLabel").text(`Average Degrees of Separation: ${avg.toFixed(2)}`);
 
-        svg.selectAll(".link")
-          .classed("highlighted", l => dist[l.source.id] !== undefined && dist[l.target.id] !== undefined);
-      }
+      // Show exact counts
+      const resultsDiv = document.getElementById("results");
+      resultsDiv.innerHTML = "<h3>People per Degree of Separation</h3>";
+      const ul = document.createElement("ul");
+      data.forEach(d => {
+        const li = document.createElement("li");
+        li.textContent = `Degree ${d.degree}: ${d.count} people`;
+        ul.appendChild(li);
+      });
+      resultsDiv.appendChild(ul);
     }
 
-    function drag(simulation) {
-      function dragstarted(event, d) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-      }
-      function dragged(event, d) {
-        d.fx = event.x;
-        d.fy = event.y;
-      }
-      function dragended(event, d) {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-      }
-      return d3.drag()
-        .on("start", dragstarted)
-        .on("drag", dragged)
-        .on("end", dragended);
-    }
-
-    // Sliders
-    const nodesRange = document.getElementById("nodesRange");
-    const neighborsRange = document.getElementById("neighborsRange");
+    // Controls
     const rewireRange = document.getElementById("rewireRange");
-    const nodesValue = document.getElementById("nodesValue");
-    const neighborsValue = document.getElementById("neighborsValue");
     const rewireValue = document.getElementById("rewireValue");
-
-    function refresh() {
-      updateGraph(+nodesRange.value, +neighborsRange.value, +rewireRange.value / 100);
-      nodesValue.textContent = nodesRange.value;
-      neighborsValue.textContent = neighborsRange.value;
+    rewireRange.oninput = () => {
       rewireValue.textContent = rewireRange.value + "%";
-    }
+    };
 
-    nodesRange.oninput = refresh;
-    neighborsRange.oninput = refresh;
-    rewireRange.oninput = refresh;
+    document.getElementById("runBtn").onclick = () => {
+      const N = +document.getElementById("nodesInput").value;
+      const K = +document.getElementById("clusterInput").value;
+      const beta = +rewireRange.value / 100;
 
-    refresh();
+      const edges = generateGraph(N, K, beta);
+      const { distCounts, avg } = computeShortestPaths(N, edges);
+      drawChart(distCounts, avg);
+    };
+
+    // Run once on load
+    document.getElementById("runBtn").click();
   </script>
 </body>
 </html>
