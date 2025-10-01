@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Degrees of Separation - Small World Simulation</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f1117;
+      color: white;
+      text-align: center;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      margin-top: 20px;
+      font-size: 24px;
+    }
+    .controls {
+      margin: 20px auto;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+    }
+    .controls label {
+      display: flex;
+      flex-direction: column;
+      font-size: 14px;
+    }
+    svg {
+      background: #181b25;
+      margin: 20px auto;
+      display: block;
+      border-radius: 12px;
+    }
+    .node {
+      stroke: #fff;
+      stroke-width: 1.5px;
+      cursor: pointer;
+    }
+    .link {
+      stroke: #888;
+      stroke-opacity: 0.6;
+    }
+    .highlighted {
+      stroke: #ffcc00 !important;
+      stroke-width: 3px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Degrees of Separation Simulation</h1>
+  <div class="controls">
+    <label>
+      Nodes
+      <input type="range" id="nodesRange" min="10" max="100" value="30">
+      <span id="nodesValue">30</span>
+    </label>
+    <label>
+      Neighbors
+      <input type="range" id="neighborsRange" min="1" max="10" value="2">
+      <span id="neighborsValue">2</span>
+    </label>
+    <label>
+      Random %
+      <input type="range" id="rewireRange" min="0" max="100" value="10">
+      <span id="rewireValue">10%</span>
+    </label>
+  </div>
+
+  <svg id="network" width="800" height="600"></svg>
+
+  <script>
+    const svg = d3.select("#network");
+    const width = +svg.attr("width");
+    const height = +svg.attr("height");
+
+    let nodes = [], links = [];
+    let simulation;
+
+    function generateSmallWorld(N, K, beta) {
+      nodes = d3.range(N).map(i => ({ id: i }));
+      links = [];
+
+      // Create ring lattice
+      for (let i = 0; i < N; i++) {
+        for (let j = 1; j <= K; j++) {
+          let target = (i + j) % N;
+          if (Math.random() < beta) {
+            // Random rewire
+            target = Math.floor(Math.random() * N);
+            if (target === i) continue;
+          }
+          links.push({ source: i, target });
+        }
+      }
+    }
+
+    function updateGraph(N, K, beta) {
+      generateSmallWorld(N, K, beta);
+
+      svg.selectAll("*").remove();
+
+      const link = svg.append("g")
+        .selectAll("line")
+        .data(links)
+        .enter().append("line")
+        .attr("class", "link");
+
+      const node = svg.append("g")
+        .selectAll("circle")
+        .data(nodes)
+        .enter().append("circle")
+        .attr("class", "node")
+        .attr("r", 6)
+        .attr("fill", "#4cc9f0")
+        .call(drag(simulation))
+        .on("click", highlightConnections);
+
+      simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+        .force("charge", d3.forceManyBody().strength(-200))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .on("tick", ticked);
+
+      function ticked() {
+        link
+          .attr("x1", d => d.source.x)
+          .attr("y1", d => d.source.y)
+          .attr("x2", d => d.target.x)
+          .attr("y2", d => d.target.y);
+
+        node
+          .attr("cx", d => d.x)
+          .attr("cy", d => d.y);
+      }
+
+      function highlightConnections(event, d) {
+        svg.selectAll(".link").classed("highlighted", false);
+        svg.selectAll(".node").attr("fill", "#4cc9f0");
+
+        // BFS for shortest path degrees
+        let queue = [d.id], visited = new Set([d.id]), dist = { [d.id]: 0 };
+        while (queue.length) {
+          let current = queue.shift();
+          links.forEach(l => {
+            let neighbor = null;
+            if (l.source.id === current) neighbor = l.target.id;
+            else if (l.target.id === current) neighbor = l.source.id;
+            if (neighbor !== null && !visited.has(neighbor)) {
+              visited.add(neighbor);
+              dist[neighbor] = dist[current] + 1;
+              queue.push(neighbor);
+            }
+          });
+        }
+
+        svg.selectAll(".node")
+          .attr("fill", n => dist[n.id] === 0 ? "#ffcc00" : 
+                             dist[n.id] === undefined ? "#444" :
+                             d3.interpolateCool(dist[n.id] / 6));
+
+        svg.selectAll(".link")
+          .classed("highlighted", l => dist[l.source.id] !== undefined && dist[l.target.id] !== undefined);
+      }
+    }
+
+    function drag(simulation) {
+      function dragstarted(event, d) {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+      }
+      function dragged(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+      }
+      function dragended(event, d) {
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+      }
+      return d3.drag()
+        .on("start", dragstarted)
+        .on("drag", dragged)
+        .on("end", dragended);
+    }
+
+    // Sliders
+    const nodesRange = document.getElementById("nodesRange");
+    const neighborsRange = document.getElementById("neighborsRange");
+    const rewireRange = document.getElementById("rewireRange");
+    const nodesValue = document.getElementById("nodesValue");
+    const neighborsValue = document.getElementById("neighborsValue");
+    const rewireValue = document.getElementById("rewireValue");
+
+    function refresh() {
+      updateGraph(+nodesRange.value, +neighborsRange.value, +rewireRange.value / 100);
+      nodesValue.textContent = nodesRange.value;
+      neighborsValue.textContent = neighborsRange.value;
+      rewireValue.textContent = rewireRange.value + "%";
+    }
+
+    nodesRange.oninput = refresh;
+    neighborsRange.oninput = refresh;
+    rewireRange.oninput = refresh;
+
+    refresh();
+  </script>
+</body>
+</html>
